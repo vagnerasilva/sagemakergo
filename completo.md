@@ -214,3 +214,69 @@ Ação: Priorize instâncias C5 ou C6g (Graviton, se compilar Go para ARM). Elas
 Escrever os resultados de volta para o S3 pode ser lento se não for feito via buffer.
 Ponto de Trabalho: csv.Writer com Buffer.
 Ação: Sempre use writer.Flush() apenas ao final do processamento do lote e garanta que está escrevendo em blocos, evitando chamadas de sistema (syscalls) para cada linha de predição.
+
+
+## Profiling 
+
+Para ativar o Profiling em tempo real no seu servidor Go, você só precisa importar o pacote net/http/pprof e iniciar o servidor. Isso permitirá que você veja exatamente onde o binário está gastando CPU (se no parser de CSV ou na predição do Leaves) e como a memória está sendo alocada.
+1. Modificações no main.go
+```
+Adicione o import (o caractere _ serve para registrar as rotas de perfil automaticamente) e inicie o servidor pprof em uma goroutine separada:
+import (
+	_ "net/http/pprof" // Importação mágica que registra os handlers de profiling
+	"net/http"
+	"fmt"
+)
+
+func main() {
+	// Inicia o pprof em uma porta diferente (ex: 6060) para não interferir no SageMaker
+	go func() {
+		fmt.Println("[DEBUG] Profiler rodando na porta 6060")
+		http.ListenAndServe(":6060", nil)
+	}()
+
+	// ... seu código original do servidor na porta 8080 ...
+}
+```
+2. Como analisar os Gargalos (Localmente)
+Com o servidor rodando e você enviando dados de teste, execute estes comandos no seu terminal:
+Verificar uso de CPU
+```
+go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30
+```
+
+Isso gera um relatório de 30 segundos. Digite top no console para ver as funções mais lentas.
+Verificar alocações de Memória (Heap):
+```
+go tool pprof http://localhost:6060/debug/pprof/heap
+```
+
+Use o comando svg para gerar um gráfico visual de onde a memória está sendo "presa".
+Resumo Final dos Pontos de Atenção (Checklist de Performance)
+[ ] Deserialização: O strconv.ParseFloat é o seu maior suspeito de lentidão. Monitore-o no pprof.
+[ ] Reuso de Memória: Garanta que reader.ReuseRecord = true está ativo no handler.
+[ ] Buffer de Escrita: O csv.NewWriter deve receber o w (ResponseWriter) e o Flush() deve ser chamado só no fim do loop.
+[ ] Concorrência: Ajuste MaxConcurrentTransforms no Boto3 para saturar a CPU da instância ml.c5.
+[ ] Logs: Remova fmt.Printf dentro do loop de predição; use logs apenas para erros graves.
+
+## 🛠️ Debug e Profiling de Performance
+O servidor Go inclui o `net/http/pprof` para análise de gargalos.
+- **Porta 8080:** Inferência (SageMaker).
+- **Porta 6060:** Profiling (Apenas para ambiente de desenvolvimento).
+
+Para analisar CPU via terminal:
+`go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30`
+
+Este setup permite identificar se a latência está no parser de CSV ou no cálculo matemático do modelo.
+
+
+## 🛠️ Debug e Profiling de Performance
+O servidor Go inclui o `net/http/pprof` para análise de gargalos.
+- **Porta 8080:** Inferência (SageMaker).
+- **Porta 6060:** Profiling (Apenas para ambiente de desenvolvimento).
+
+Para analisar CPU via terminal:
+`go tool pprof http://localhost:6060/debug/pprof/profile?seconds=30`
+
+Este setup permite identificar se a latência está no parser de CSV ou no cálculo matemático do modelo.
+
