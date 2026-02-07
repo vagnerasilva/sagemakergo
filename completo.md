@@ -39,7 +39,7 @@ input := &sagemaker.CreateTransformJobInput{
         InstanceType:  types.TrainingInstanceTypeMlC5Xlarge,
     },
 }
-
+```
 
 3. O Container de Inferência Genérico (Go + Leaves)
 Para permitir que o time de Data Science utilize o mesmo container para múltiplos projetos, a lógica de carregamento do modelo foi movida para Variáveis de Ambiente.
@@ -48,7 +48,7 @@ O binário Go utiliza o S3 Manager para baixar o modelo em pedaços paralelos do
 s3://{BUCKET}/{PROJETO_ID}/{EXPERIMENTO_ID}/model.txt
 Código Completo do Servidor (main.go)
 package main
-
+```
 import (
 	"context"
 	"encoding/csv"
@@ -147,12 +147,12 @@ func main() {
 	http.HandleFunc("/invocations", invocationsHandler)
 	http.ListenAndServe(":8080", nil)
 }
-
+```
 
 4. Infraestrutura e Docker (Multi-Stage)
 O Dockerfile utiliza o estágio de build para gerar um binário estático de apenas ~40MB, reduzindo drasticamente o tempo de "cold start" na AWS.
 
-
+```
 FROM golang:1.21-bullseye AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
@@ -165,7 +165,7 @@ RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/
 COPY --from=builder /server /usr/local/bin/server
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/server"]
-
+```
 
 5. Estudo Comparativo e Custos (sa-east-1)
 Recurso	Python (Baseline)	Go (Proposto)
@@ -180,10 +180,10 @@ Referência: Gerar predições via script Python original.
 Go Test: Processar o mesmo CSV via servidor Go.
 Comparação: Usar o script abaixo para validar a precisão
 
-
+```
 matches = np.isclose(py_preds, go_preds, atol=1e-5).mean()
 print(f"Similaridade: {matches * 100:.4f}%")
-
+```
 
 Para garantir que sua implementação em sa-east-1 não apenas funcione, mas atinja o estado de "bare-metal performance", aqui está a lista detalhada dos gargalos latentes e os pontos de ação para mitigá-los:
 1. Gargalo de I/O e Serialização (O mais crítico)
