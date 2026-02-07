@@ -184,3 +184,33 @@ Comparação: Usar o script abaixo para validar a precisão
 matches = np.isclose(py_preds, go_preds, atol=1e-5).mean()
 print(f"Similaridade: {matches * 100:.4f}%")
 
+
+Para garantir que sua implementação em sa-east-1 não apenas funcione, mas atinja o estado de "bare-metal performance", aqui está a lista detalhada dos gargalos latentes e os pontos de ação para mitigá-los:
+1. Gargalo de I/O e Serialização (O mais crítico)
+O custo de converter texto (CSV) para tipos numéricos (float64) e vice-versa é, muitas vezes, maior que o tempo da predição matemática do modelo.
+Ponto de Trabalho: Use strconv.ParseFloat com cautela. Se o volume for extremo, considere trocar CSV por Protobuf ou Avro, que possuem desserialização nativa muito mais rápida em Go.
+Ação: Ative o reader.ReuseRecord = true para evitar que o Garbage Collector (GC) precise limpar milhões de pequenos objetos (slices de strings) criados a cada linha lida.
+2. Gargalo de Concorrência do SageMaker (Orquestração)
+Se o SageMaker enviar poucas requisições simultâneas, sua CPU ficará ociosa, desperdiçando o dinheiro pago pela instância.
+Ponto de Trabalho: O parâmetro MaxConcurrentTransforms no CreateTransformJob.
+Ação: Teste valores agressivos (inicie em 20 e suba até 100). O Go gerencia Goroutines com overhead mínimo; o limite deve ser o saturamento da CPU da instância (mantenha em ~90% no CloudWatch).
+3. Gargalo de Rede e Latência de Payload
+Requisições muito pequenas geram um overhead de cabeçalhos HTTP e negociação de pacotes TCP desnecessário.
+Ponto de Trabalho: MaxPayloadInMB e BatchStrategy: MultiRecord.
+Ação: Configure o payload para o limite próximo de 20MB. Isso garante que cada "viagem" do S3 para o seu container traga dados suficientes para manter o processador ocupado por mais tempo.
+4. Gargalo de Memória e Garbage Collection (GC)
+O Go pode sofrer pausas de "Stop the World" se houver muitas alocações de memória por segundo, o que aumenta a latência de cauda (P99).
+Ponto de Trabalho: Variável de ambiente GOGC.
+Ação: Como o container de inferência é focado em uma tarefa única, você pode definir GOGC=off (se tiver RAM sobrando) ou GOGC=200 para reduzir a frequência da coleta de lixo, priorizando a velocidade de processamento.
+5. Gargalo de Inicialização (Cold Start)
+Em instâncias de Batch Transform, o tempo que o container leva para ficar pronto é cobrado.
+Ponto de Trabalho: Tamanho da imagem e carregamento do modelo.
+Ação: Utilize o S3 Downloader paralelizável (que já incluímos no código) para baixar o model.txt usando múltiplas conexões simultâneas. Isso é vital em sa-east-1 para modelos grandes.
+6. Gargalo de Tipo de Instância (CPU Bound)
+O LightGBM (via Leaves) depende quase exclusivamente da performance de núcleo único e instruções vetoriais da CPU.
+Ponto de Trabalho: Seleção da família de instâncias.
+Ação: Priorize instâncias C5 ou C6g (Graviton, se compilar Go para ARM). Elas possuem clock superior às instâncias M5 e são otimizadas para cálculos matemáticos, resultando em menor custo por predição.
+7. Gargalo de Escrita de Resultados
+Escrever os resultados de volta para o S3 pode ser lento se não for feito via buffer.
+Ponto de Trabalho: csv.Writer com Buffer.
+Ação: Sempre use writer.Flush() apenas ao final do processamento do lote e garanta que está escrevendo em blocos, evitando chamadas de sistema (syscalls) para cada linha de predição.
